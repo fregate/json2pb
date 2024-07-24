@@ -25,6 +25,8 @@ def generate_proto_files(proto_dir, output_dir):
         # TODO: Check git commit and decide regenerate
         shutil.rmtree(output_dir + "/proto")
 
+    import_dir = pathlib.PurePath(proto_dir).parent
+    skip_parts = import_dir.parts.__len__()
     generated_imports = []
     # Iterate .proto files
     for root, _, files in os.walk(proto_dir):
@@ -34,12 +36,15 @@ def generate_proto_files(proto_dir, output_dir):
                 command = [
                     'protoc',
                     f'--python_out={output_dir}',
+                    f'-I{import_dir}',
                     proto_file_path,
                     "--experimental_allow_proto3_optional"
                 ]
                 try:
                     subprocess.run(command, check=True)
-                    generated_imports.append(pathlib.PurePath("out", proto_file_path).with_name(pathlib.PurePath(proto_file_path).stem + "_pb2.py"))
+                    simplified_file = pathlib.PurePath(output_dir) / pathlib.PurePath(*pathlib.PurePath(proto_file_path).parts[skip_parts:])
+                    generated_imports.append(
+                        simplified_file.with_name(pathlib.PurePath(proto_file_path).stem + "_pb2.py"))
                 except subprocess.CalledProcessError as e:
                     eprint(f"Error in {proto_file_path} generation: {e}")
     
@@ -50,6 +55,7 @@ def dynamic_import(module_name, module_path):
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+
     return module
 
 def main():
@@ -70,14 +76,20 @@ def main():
         eprint(f"Can't find {args.type} in generated files")
         return
 
-    message_py = dynamic_import(args.type + "_pb2", module_path[0])
+    if args.output_dir not in sys.path:
+        sys.path.append(args.output_dir)
 
+    message_py = dynamic_import(args.type + "_pb2", module_path[0])
     json: str = ""
     if args.__contains__("json") and args.json:
         json_file = open(args.json)
         json = json_file.read()
     else:
         json = sys.stdin.read()
+
+    if not json:
+        eprint(f"No Json specified (or it is empty). Abort")
+        return
 
     message_builder = getattr(message_py, args.type)
     if message_builder:
