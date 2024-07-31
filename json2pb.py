@@ -47,7 +47,10 @@ def generate_proto_files(proto_dir, output_dir):
                         simplified_file.with_name(pathlib.PurePath(proto_file_path).stem + "_pb2.py"))
                 except subprocess.CalledProcessError as e:
                     eprint(f"Error in {proto_file_path} generation: {e}")
-    
+
+    if output_dir not in sys.path:
+        sys.path.append(output_dir)
+
     return generated_imports
 
 def dynamic_import(module_name, module_path):
@@ -57,6 +60,27 @@ def dynamic_import(module_name, module_path):
     spec.loader.exec_module(module)
 
     return module
+
+def message_generator(generated_files, pbmsg_type, json):
+    if not json:
+        raise "No Json specified (or it is empty). Abort"
+
+    module_path = [x for x in generated_files if x.name.startswith(pbmsg_type)]
+    if not module_path:
+        raise f"Can't find {pbmsg_type} in generated files"
+
+    message_py = dynamic_import(pbmsg_type + "_pb2", module_path[0])
+
+    message_builder = getattr(message_py, pbmsg_type)
+    if message_builder:
+        message = message_builder()
+        try:
+            json_format.Parse(json, message)
+            return message
+        except json_format.ParseError as e:
+            raise f"Can't parse Json input to {pbmsg_type} message. Error: {e}"
+    else:
+        raise f"No {pbmsg_type} in {message_py} module"
 
 def main():
     parser = argparse.ArgumentParser(description='Generate PB data from Json')
@@ -71,15 +95,7 @@ def main():
     if not generated:
         eprint(f"No files were generated")
         return
-    module_path = [x for x in generated if x.name.startswith(args.type)]
-    if not module_path:
-        eprint(f"Can't find {args.type} in generated files")
-        return
 
-    if args.output_dir not in sys.path:
-        sys.path.append(args.output_dir)
-
-    message_py = dynamic_import(args.type + "_pb2", module_path[0])
     json: str = ""
     if args.__contains__("json") and args.json:
         json_file = open(args.json)
@@ -87,20 +103,8 @@ def main():
     else:
         json = sys.stdin.read()
 
-    if not json:
-        eprint(f"No Json specified (or it is empty). Abort")
-        return
-
-    message_builder = getattr(message_py, args.type)
-    if message_builder:
-        message = message_builder()
-        try:
-            json_format.Parse(json, message)
-            sys.stdout.buffer.write(message.SerializeToString())
-        except json_format.ParseError as e:
-            eprint(f"Can't parse Json input to {args.type} message. Error: {e}")
-    else:
-        eprint(f"No {args.type} in {message_py} module")
+    message = message_generator(generated, args.type, json)
+    sys.stdout.buffer.write(message.SerializeToString())
 
 if __name__ == "__main__":
     main()
